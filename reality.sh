@@ -1,138 +1,151 @@
 #!/bin/bash
 
-# REALITY 一键安装脚本
-RED="\033[31m"   # Error message
-GREEN="\033[32m" # Success message
-YELLOW="\033[33m"# Warning message
-BLUE="\033[36m"  # Info message
-PLAIN='\033[0m'
+# ==================================================
+# Xray Reality 管理腳本（進階版 / 多用戶 / 菜單）
+# ==================================================
 
-NAME="xray"
-CONFIG_FILE="/usr/local/etc/${NAME}/config.json"
-SERVICE_FILE="/etc/systemd/system/${NAME}.service"
+CONFIG="/usr/local/etc/xray/config.json"
 
-colorEcho() {
-  echo -e "${1}${@:2}${PLAIN}"
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+PLAIN="\033[0m"
+
+# root 檢查
+[ "$(id -u)" != "0" ] && echo -e "${RED}請用 root 執行${PLAIN}" && exit 1
+
+install_xray() {
+    echo -e "${GREEN}安裝 Xray...${PLAIN}"
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 }
 
-checkSystem() {
-  result=$(id | awk '{print $1}')
-  if [[ $result != "uid=0(root)" ]]; then
-    colorEcho $RED " 请以 root 身份执行该脚本"
-    exit 1
-  fi
-  res=$(which yum 2>/dev/null)
-  if [[ "$?" != "0" ]]; then
-    res=$(which apt 2>/dev/null)
-    if [[ "$?" != "0" ]]; then
-      colorEcho $RED " 不受支持的 Linux 系统"
-      exit 1
-    fi
-    PMT="apt"
-    CMD_INSTALL="apt install -y "
-    CMD_REMOVE="apt remove -y "
-    CMD_UPGRADE="apt update; apt upgrade -y; apt autoremove -y"
-  else
-    PMT="yum"
-    CMD_INSTALL="yum install -y "
-    CMD_REMOVE="yum remove -y "
-    CMD_UPGRADE="yum update -y"
-  fi
-  res=$(which systemctl 2>/dev/null)
-  if [[ "$?" != "0" ]]; then
-    colorEcho $RED " 系统版本过低，请升级到最新版本"
-    exit 1
-  fi
+gen_base_config() {
+UUID=$(cat /proc/sys/kernel/random/uuid)
+KEY=$(xray x25519)
+PRI=$(echo "$KEY" | head -n1 | awk '{print $3}')
+PUB=$(echo "$KEY" | tail -n1 | awk '{print $3}')
+PORT=$(shuf -i 20000-50000 -n 1)
+
+cat > $CONFIG <<EOF
+{
+  "inbounds":[
+    {
+      "port":$PORT,
+      "protocol":"vless",
+      "settings":{
+        "clients":[
+          {
+            "id":"$UUID",
+            "flow":"xtls-rprx-vision"
+          }
+        ],
+        "decryption":"none"
+      },
+      "streamSettings":{
+        "network":"tcp",
+        "security":"reality",
+        "realitySettings":{
+          "dest":"www.cloudflare.com:443",
+          "serverNames":["www.cloudflare.com"],
+          "privateKey":"$PRI",
+          "shortIds":[""]
+        }
+      }
+    }
+  ],
+  "outbounds":[{"protocol":"freedom"}]
+}
+EOF
+
+systemctl restart xray
+
+IP=$(curl -s ifconfig.me)
+
+echo -e "${GREEN}完成${PLAIN}"
+echo "IP: $IP"
+echo "PORT: $PORT"
+echo "UUID: $UUID"
+echo "PublicKey: $PUB"
+
+echo ""
+echo "vless://${UUID}@${IP}:${PORT}?security=reality&sni=www.cloudflare.com&fp=chrome&pbk=${PUB}&type=tcp&flow=xtls-rprx-vision"
 }
 
-status() {
-  export PATH=/usr/local/bin:$PATH
-  cmd="$(command -v xray)"
-  if [[ "$cmd" = "" ]]; then
-    echo 0
-    return
-  fi
-  if [[ ! -f $CONFIG_FILE ]]; then
-    echo 1
-    return
-  fi
-  port=$(grep -o '"port": [0-9]*' $CONFIG_FILE | awk '{print $2}')
-  if [[ -n "$port" ]]; then
-    res=$(ss -ntlp| grep ${port} | grep xray)
-    if [[ -z "$res" ]]; then
-      echo 2
-    else
-      echo 3
-    fi
-  else
-    echo 2
-  fi
+add_user() {
+UUID=$(cat /proc/sys/kernel/random/uuid)
+
+jq ".inbounds[0].settings.clients += [{\"id\":\"$UUID\",\"flow\":\"xtls-rprx-vision\"}]" $CONFIG > tmp.json && mv tmp.json $CONFIG
+
+systemctl restart xray
+
+echo -e "${GREEN}新增用戶成功${PLAIN}"
+echo "UUID: $UUID"
 }
 
-statusText() {
-  res=$(status)
-  case $res in
-    2) echo -e ${GREEN}已安装 xray${PLAIN} ${RED}未运行${PLAIN} ;;
-    3) echo -e ${GREEN}已安装 xray${PLAIN} ${GREEN}正在运行${PLAIN} ;;
-    *) echo -e ${RED}未安装 xray${PLAIN} ;;
-  esac
+del_user() {
+read -p "輸入 UUID: " UUID
+
+jq "del(.inbounds[0].settings.clients[] | select(.id==\"$UUID\"))" $CONFIG > tmp.json && mv tmp.json $CONFIG
+
+systemctl restart xray
+echo -e "${GREEN}刪除完成${PLAIN}"
 }
 
-preinstall() {
-  $PMT clean all
-  [[ "$PMT" = "apt" ]] && $PMT update
-
-  echo ""
-  echo "安装必要软件，请等待…"
-
-  if [[ "$PMT" = "apt" ]]; then
-    res=$(which ufw 2>/dev/null)
-    [[ "$?" != "0" ]] && $CMD_INSTALL ufw
-  fi
-
-  res=$(which curl 2>/dev/null)
-  [[ "$?" != "0" ]] && $CMD_INSTALL curl
-
-  res=$(which openssl 2>/dev/null)
-  [[ "$?" != "0" ]] && $CMD_INSTALL openssl
-
-  res=$(which qrencode 2>/dev/null)
-  [[ "$?" != "0" ]] && $CMD_INSTALL qrencode
-
-  res=$(which jq 2>/dev/null)
-  [[ "$?" != "0" ]] && $CMD_INSTALL jq
+list_user() {
+jq '.inbounds[0].settings.clients' $CONFIG
 }
 
-installXray() {
-  echo ""
-  echo "正在安装 Xray…"
-  bash -c "$(curl -s -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" > /dev/null 2>&1
-  colorEcho $BLUE "Xray 内核已安装完成"
-  sleep 5
+change_port() {
+read -p "新端口: " PORT
+jq ".inbounds[0].port=$PORT" $CONFIG > tmp.json && mv tmp.json $CONFIG
+systemctl restart xray
+echo -e "${GREEN}修改完成${PLAIN}"
 }
 
-updateXray() {
-  echo ""
-  echo "正在更新 Xray…"
-  bash -c "$(curl -s -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" > /dev/null 2>&1
-  colorEcho $BLUE "Xray 内核已更新完成"
-  sleep 5
+change_domain() {
+read -p "新偽裝域名: " DOMAIN
+jq ".inbounds[0].streamSettings.realitySettings.serverNames=[\"$DOMAIN\"] | .inbounds[0].streamSettings.realitySettings.dest=\"${DOMAIN}:443\"" $CONFIG > tmp.json && mv tmp.json $CONFIG
+systemctl restart xray
+echo -e "${GREEN}修改完成${PLAIN}"
 }
 
-removeXray() {
-  echo ""
-  echo "正在卸载 Xray…"
-  bash -c "$(curl -s -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge > /dev/null 2>&1
-  rm -rf /etc/systemd/system/xray.service > /dev/null 2>&1
-  rm -rf /usr/local/bin/xray > /dev/null 2>&1
-  rm -rf /usr/local/etc/xray > /dev/null 2>&1
-  rm -rf /usr/local/share/xray > /dev/null 2>&1
-  rm -rf /var/log/xray > /dev/null 2>&1
-  colorEcho $RED "Xray 卸载完成"
-  sleep 5
+bbr_on() {
+echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+sysctl -p
+echo -e "${GREEN}BBR 開啟完成${PLAIN}"
 }
 
-# 脚本逻辑等其他函数未删…
-# 如果你需要完整菜单、生成 config.json 等功能
-# 我也可以帮你整理成一个干净版本供 GitHub 上传
+menu() {
+clear
+echo -e "${YELLOW}===== Reality 管理面板 =====${PLAIN}"
+echo "1. 安裝 Xray"
+echo "2. 生成 Reality 節點"
+echo "3. 新增用戶"
+echo "4. 刪除用戶"
+echo "5. 查看用戶"
+echo "6. 修改端口"
+echo "7. 修改偽裝域名"
+echo "8. 開啟 BBR"
+echo "0. 退出"
+echo "================================"
+read -p "請選擇: " num
 
+case "$num" in
+1) install_xray ;;
+2) gen_base_config ;;
+3) add_user ;;
+4) del_user ;;
+5) list_user ;;
+6) change_port ;;
+7) change_domain ;;
+8) bbr_on ;;
+0) exit ;;
+*) echo "錯誤";;
+esac
+}
+
+while true; do
+menu
+read -p "按 Enter 繼續..."
+done
