@@ -1,100 +1,163 @@
 #!/bin/bash
 
-# ====================================================
-#  Reality一键安装脚本 (精简维护版)
-# ====================================================
+# ==================================================
+# Xray Reality PRO 管理腳本（防封加強版）
+# 多端口 + 偽裝池 + 多用戶 + 菜單
+# ==================================================
 
-CONFIG_FILE="/usr/local/etc/xray/config.json"
-PUB_KEY_FILE="/usr/local/etc/xray/public_key.txt"
+CONFIG="/usr/local/etc/xray/config.json"
+DOMAIN_POOL=(
+"www.cloudflare.com"
+"www.microsoft.com"
+"www.apple.com"
+"www.amazon.com"
+"www.google.com"
+"www.youtube.com"
+)
 
-red='\033[0;31m'
-green='\033[0;32m'
-yellow='\033[0;33m'
-plain='\033[0m'
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+PLAIN="\033[0m"
 
-[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用 root 运行！\n" && exit 1
+[ "$(id -u)" != "0" ] && echo -e "${RED}請用 root${PLAIN}" && exit 1
 
-# 环境检查与安装 jq
 install_base() {
-    apt update && apt install wget curl tar openssl jq -y || yum install wget curl tar openssl jq -y
+apt update -y || yum update -y
+apt install -y jq curl openssl || yum install -y jq curl openssl
 }
 
-# 提取配置 (修复版)
-show_config() {
-    if [[ ! -f $CONFIG_FILE ]]; then
-        echo -e "${red}错误：未检测到配置！${plain}"
-    else
-        install_base > /dev/null 2>&1
-        local ip=$(curl -s ipv4.icanhazip.com)
-        # 使用 jq 精准解析 JSON
-        local uuid=$(jq -r '.inbounds[0].settings.clients[0].id' $CONFIG_FILE)
-        local port=$(jq -r '.inbounds[0].port' $CONFIG_FILE)
-        local sni=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' $CONFIG_FILE)
-        local sid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' $CONFIG_FILE)
-        local pbk=$(cat $PUB_KEY_FILE 2>/dev/null)
-        
-        # 兼容性处理
-        [[ "$pbk" == "" ]] && pbk="hS7_M6M-e6M_N6M-e6M_N6M-e6M_N6M-e6M_N6M-e6M"
-
-        echo -e "\n${green}--- REALITY 配置信息 ---${plain}"
-        echo -e "地址: ${yellow}$ip${plain}  端口: ${yellow}$port${plain}"
-        echo -e "UUID: ${yellow}$uuid${plain}"
-        echo -e "SNI: ${yellow}$sni${plain}"
-        echo -e "Public Key: ${yellow}$pbk${plain}"
-        echo -e "Short ID: ${yellow}$sid${plain}"
-        echo -e "\n${green}--- VLESS 分享链接 ---${plain}"
-        echo -e "${yellow}vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=chrome&pbk=$pbk&sid=$sid&type=tcp&flow=xtls-rprx-vision#My_Reality${plain}\n"
-    fi
-    read -p "按回车返回主菜单"
+install_xray() {
+echo -e "${GREEN}安裝 Xray${PLAIN}"
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 }
 
-# 搭建 REALITY (保持原版逻辑)
-install_reality() {
-    install_base
-    bash <(curl -L https://github.com)
-    chmod +x /usr/local/bin/xray
-    
-    local uuid=$(cat /proc/sys/kernel/random/uuid)
-    local keys=$(/usr/local/bin/xray x25519)
-    local pri=$(echo "$keys" | grep "Private key" | awk '{print $3}')
-    local pub=$(echo "$keys" | grep "Public key" | awk '{print $3}')
-    local sid=$(openssl rand -hex 8)
-    
-    [[ -z "$pub" ]] && pri="6OOfV2X9CjT9Yy7j-fG_H6S7q8_u6M-e6M_N6M-e6M_M" && pub="hS7_M6M-e6M_N6M-e6M_N6M-e6M_N6M-e6M_N6M-e6M"
-    echo "$pub" > $PUB_KEY_FILE
+gen_keys() {
+KEY=$(xray x25519)
+PRI=$(echo "$KEY" | head -n1 | awk '{print $3}')
+PUB=$(echo "$KEY" | tail -n1 | awk '{print $3}')
+}
 
-    cat << EOF > $CONFIG_FILE
-{"log":{"loglevel":"warning"},"inbounds":[{"port":8443,"protocol":"vless","settings":{"clients":[{"id":"$uuid","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":"www.lovelive-anime.jp:443","xver":0,"serverNames":["www.lovelive-anime.jp"],"privateKey":"$pri","shortIds":["$sid"]}}}],"outbounds":[{"protocol":"freedom"}]}
+random_domain() {
+echo ${DOMAIN_POOL[$RANDOM % ${#DOMAIN_POOL[@]}]}
+}
+
+add_node() {
+UUID=$(cat /proc/sys/kernel/random/uuid)
+PORT=$(shuf -i 20000-60000 -n 1)
+DOMAIN=$(random_domain)
+gen_keys
+
+TMP=$(mktemp)
+
+if [ ! -f "$CONFIG" ]; then
+cat > $CONFIG <<EOF
+{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}
 EOF
-    systemctl restart xray
-    echo -e "${green}搭建完成！${plain}"
-    show_config
+fi
+
+jq ".inbounds += [{
+  \"port\":$PORT,
+  \"protocol\":\"vless\",
+  \"settings\":{\"clients\":[{\"id\":\"$UUID\",\"flow\":\"xtls-rprx-vision\"}],\"decryption\":\"none\"},
+  \"streamSettings\":{
+    \"network\":\"tcp\",
+    \"security\":\"reality\",
+    \"realitySettings\":{
+      \"dest\":\"${DOMAIN}:443\",
+      \"serverNames\":[\"${DOMAIN}\"],
+      \"privateKey\":\"$PRI\",
+      \"shortIds\":[\"\"]
+}}}]" $CONFIG > $TMP && mv $TMP $CONFIG
+
+systemctl restart xray
+
+IP=$(curl -s ifconfig.me)
+
+echo -e "${GREEN}新增節點成功${PLAIN}"
+echo "IP: $IP"
+echo "PORT: $PORT"
+echo "UUID: $UUID"
+echo "SNI: $DOMAIN"
+echo "PBK: $PUB"
+echo ""
+echo "vless://${UUID}@${IP}:${PORT}?security=reality&sni=${DOMAIN}&fp=chrome&pbk=${PUB}&type=tcp&flow=xtls-rprx-vision"
 }
 
-# 菜单循环
+list_nodes() {
+jq '.inbounds[].port' $CONFIG
+}
+
+del_node() {
+read -p "輸入端口刪除: " PORT
+jq "del(.inbounds[] | select(.port==$PORT))" $CONFIG > tmp && mv tmp $CONFIG
+systemctl restart xray
+echo -e "${GREEN}刪除完成${PLAIN}"
+}
+
+change_node() {
+read -p "端口: " PORT
+read -p "新偽裝域名: " DOMAIN
+
+jq "(.inbounds[] | select(.port==$PORT) | .streamSettings.realitySettings.serverNames)=[\"$DOMAIN\"] |
+(.inbounds[] | select(.port==$PORT) | .streamSettings.realitySettings.dest)=\"${DOMAIN}:443\"" \
+$CONFIG > tmp && mv tmp $CONFIG
+
+systemctl restart xray
+echo -e "${GREEN}修改完成${PLAIN}"
+}
+
+add_user() {
+read -p "端口: " PORT
+UUID=$(cat /proc/sys/kernel/random/uuid)
+
+jq "(.inbounds[] | select(.port==$PORT) | .settings.clients) += [{\"id\":\"$UUID\",\"flow\":\"xtls-rprx-vision\"}]" \
+$CONFIG > tmp && mv tmp $CONFIG
+
+systemctl restart xray
+echo "UUID: $UUID"
+}
+
+bbr_on() {
+echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+sysctl -p
+echo -e "${GREEN}BBR 開啟${PLAIN}"
+}
+
+menu() {
+clear
+echo -e "${YELLOW}===== Reality PRO 管理 =====${PLAIN}"
+echo "1. 安裝基礎環境"
+echo "2. 安裝 Xray"
+echo "3. 新增節點（自動偽裝）"
+echo "4. 查看節點"
+echo "5. 刪除節點"
+echo "6. 修改節點偽裝"
+echo "7. 新增用戶"
+echo "8. 開啟 BBR"
+echo "0. 退出"
+echo "==========================="
+read -p "選擇: " num
+
+case "$num" in
+1) install_base ;;
+2) install_xray ;;
+3) add_node ;;
+4) list_nodes ;;
+5) del_node ;;
+6) change_node ;;
+7) add_user ;;
+8) bbr_on ;;
+0) exit ;;
+*) echo "錯誤";;
+esac
+}
+
 while true; do
-    clear
-    echo -e "
-##################################################################
-#                   Reality一键安装脚本 (维护版)                 #
-##################################################################
-  1. 安装内核  2. 卸载内核
- -------------
-  4. 一键搭建 REALITY
-  5. 查看配置链接
- -------------
-  7. 启动  8. 重启  9. 停止  0. 退出
-"
-    read -p "选择: " num
-    case "$num" in
-        1) bash <(curl -L https://github.com) ;;
-        2) bash <(curl -L https://github.com) --remove ;;
-        4) install_reality ;;
-        5) show_config ;;
-        7) systemctl start xray ;;
-        8) systemctl restart xray ;;
-        9) systemctl stop xray ;;
-        0) exit 0 ;;
+menu
+read -p "Enter 繼續..."
+done
     esac
 done
 
