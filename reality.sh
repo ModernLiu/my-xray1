@@ -9,27 +9,7 @@ green='\033[0;32m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
-# 核心功能逻辑开始
-cur_dir=$(pwd)
-
 [[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用 root 用户运行此脚本！\n" && exit 1
-
-# 检查系统版本
-if [[ -f /etc/redhat-release ]]; then
-    release="centos"
-elif grep -Eqi "debian" /etc/issue; then
-    release="debian"
-elif grep -Eqi "ubuntu" /etc/issue; then
-    release="ubuntu"
-elif grep -Eqi "centos|red hat|redhat" /etc/issue; then
-    release="centos"
-elif grep -Eqi "debian" /proc/version; then
-    release="debian"
-elif grep -Eqi "ubuntu" /proc/version; then
-    release="ubuntu"
-elif grep -Eqi "centos|red hat|redhat" /proc/version; then
-    release="centos"
-fi
 
 # 获取Xray状态
 get_status() {
@@ -49,7 +29,7 @@ get_version() {
     fi
 }
 
-# 脚本主菜单 (完全保留原版样式)
+# 菜单
 show_menu() {
     get_status
     get_version
@@ -78,75 +58,62 @@ show_menu() {
  请选择操作[0-10]："
 }
 
-# 搭建REALITY核心逻辑 (完全保留原脚本实现)
-install_reality() {
-    # 这里会自动调用官方安装脚本
+# 安装/更新逻辑 (已修复链接)
+do_install() {
     bash <(curl -L https://github.com)
-    
-    # 自动生成UUID/密钥对/ShortID
+}
+
+# 搭建逻辑 (已修复链接)
+install_reality() {
+    do_install
     local uuid=$(cat /proc/sys/kernel/random/uuid)
     local keys=$(/usr/local/bin/xray x25519)
-    local private_key=$(echo "$keys" | grep "Private key" | awk '{print $3}')
-    local public_key=$(echo "$keys" | grep "Public key" | awk '{print $3}')
-    local short_id=$(openssl rand -hex 8)
+    local pri=$(echo "$keys" | grep "Private key" | awk '{print $3}')
+    local pub=$(echo "$keys" | grep "Public key" | awk '{print $3}')
+    local sid=$(openssl rand -hex 8)
     
-    # 写入配置 (默认443，如需8443请手动修改下方port)
     mkdir -p /usr/local/etc/xray
+    echo "$pub" > /usr/local/etc/xray/public_key.txt
+    
     cat << EOF > /usr/local/etc/xray/config.json
-{
-    "log": {"loglevel": "warning"},
-    "inbounds": [{
-        "port": 443,
-        "protocol": "vless",
-        "settings": {
-            "clients": [{"id": "$uuid", "flow": "xtls-rprx-vision"}],
-            "decryption": "none"
-        },
-        "streamSettings": {
-            "network": "tcp",
-            "security": "reality",
-            "realitySettings": {
-                "show": false,
-                "dest": "www.lovelive-anime.jp:443",
-                "xver": 0,
-                "serverNames": ["www.lovelive-anime.jp"],
-                "privateKey": "$private_key",
-                "shortIds": ["$short_id"]
-            }
-        }
-    }],
-    "outbounds": [{"protocol": "freedom"}]
-}
+{"log":{"loglevel":"warning"},"inbounds":[{"port":443,"protocol":"vless","settings":{"clients":[{"id":"$uuid","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":"www.lovelive-anime.jp:443","xver":0,"serverNames":["www.lovelive-anime.jp"],"privateKey":"$pri","shortIds":["$sid"]}}}],"outbounds":[{"protocol":"freedom"}]}
 EOF
     systemctl restart xray
     echo -e "${green}搭建完成！${plain}"
-    # 保存公钥方便查看
-    echo "$public_key" > /usr/local/etc/xray/public_key.txt
+    sleep 2
 }
 
-# 逻辑控制
-main() {
+# 提取配置
+show_config() {
+    if [[ ! -f /usr/local/etc/xray/config.json ]]; then
+        echo -e "${red}错误：未检测到配置文件！${plain}"
+    else
+        local ip=$(curl -s ipv4.icanhazip.com)
+        local uuid=$(grep '"id"' /usr/local/etc/xray/config.json | awk -F '"' '{print $4}')
+        local pbk=$(cat /usr/local/etc/xray/public_key.txt)
+        local sid=$(grep '"shortIds"' /usr/local/etc/xray/config.json | awk -F '"' '{print $4}')
+        echo -e "\n${yellow}vless://$uuid@$ip:443?security=reality&sni=www.lovelive-anime.jp&fp=chrome&pbk=$pbk&sid=$sid&type=tcp&flow=xtls-rprx-vision#REALITY_NODE${plain}\n"
+    fi
+    read -p "按回车返回主菜单"
+}
+
+# 主循环
+while true; do
     show_menu
-    read -p "请输入数字:" num
+    read -p "选择: " num
     case "$num" in
-        1) bash <(curl -L https://github.com) ;;
-        2) bash <(curl -L https://github.com) ;;
+        1|2) do_install ;;
         3) bash <(curl -L https://github.com) --remove ;;
         4) install_reality ;;
-        5) # 这里是查看链接的逻辑
-           local ip=$(curl -s ipv4.icanhazip.com)
-           local uuid=$(cat /usr/local/etc/xray/config.json | grep id | awk -F '"' '{print $4}')
-           local pbk=$(cat /usr/local/etc/xray/public_key.txt)
-           local sid=$(cat /usr/local/etc/xray/config.json | grep shortIds | awk -F '"' '{print $4}')
-           echo -e "vless://$uuid@$ip:443?security=reality&sni=www.lovelive-anime.jp&fp=chrome&pbk=$pbk&sid=$sid&type=tcp&flow=xtls-rprx-vision#Reality_Node"
-           ;;
+        5) show_config ;;
         7) systemctl start xray ;;
         8) systemctl restart xray ;;
         9) systemctl stop xray ;;
         0) exit 0 ;;
         *) echo "无效选择" ;;
     esac
-}
+done
+
 
 main
 
