@@ -1,6 +1,5 @@
 #!/bin/bash
-# REALITY一键安装脚本 
-
+# REALITY一键安装脚本
 RED="\033[31m"      # Error message
 GREEN="\033[32m"    # Success message
 YELLOW="\033[33m"   # Warning message
@@ -713,13 +712,13 @@ stop() {
 
 menu() {
     clear
-    bash -c "$(curl -s -L https://raw.githubusercontent.com/ModernLiu/my-xray1/refs/heads/main/reality.sh)"
+    bash -c "$(curl -s -L https://raw.githubusercontent.com/yirenchengfeng1/linux/main/reality.sh)"
 }
 
 Xray() {
     clear
     echo "##################################################################"
-    echo -e "#                   ${RED}Reality一键安装脚本${PLAIN}                                    #"
+    echo -e "#                   ${RED}Reality一键安装脚本${PLAIN}                                        echo "##################################################################"
 
     echo -e "  ${GREEN}  <Xray内核版本>  ${YELLOW}"	
     echo -e "  ${GREEN}1.${PLAIN}  安装xray"	
