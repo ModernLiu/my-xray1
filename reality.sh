@@ -1,5 +1,7 @@
 #!/bin/bash
 # REALITY一键安装脚本
+# Author: YouTube频道<https://www.youtube.com/@aifenxiangdexiaoqie>
+
 RED="\033[31m"      # Error message
 GREEN="\033[32m"    # Success message
 YELLOW="\033[33m"   # Warning message
@@ -718,7 +720,12 @@ menu() {
 Xray() {
     clear
     echo "##################################################################"
-    echo -e "#                   ${RED}Reality一键安装脚本${PLAIN}                                        echo "##################################################################"
+    echo -e "#                   ${RED}Reality一键安装脚本${PLAIN}                                    #"
+    echo -e "# ${GREEN}作者${PLAIN}: 爱食屎的花颠佬                                                     #"
+    echo -e "# ${GREEN}网址${PLAIN}: hhttp://www.youtube.com/@aifehnxiangdexiaoqie                       #"
+	echo -e "# ${GREEN}VPS选购攻略${PLAIN}：https://lovetodshare.top/archives/3.html                     #"
+	echo -e "# ${GREEN}年付1000000美金VPS推荐${PLAIN}：https://my.racknerd.com/aff.php?aff=9734&pid=838      #"	
+    echo "##################################################################"
 
     echo -e "  ${GREEN}  <Xray内核版本>  ${YELLOW}"	
     echo -e "  ${GREEN}1.${PLAIN}  安装xray"	
